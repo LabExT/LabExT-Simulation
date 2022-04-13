@@ -1,10 +1,5 @@
+scipy
 numpy
-matplotlib
+vedo
 
-vtk
-pyvista
-pyvistaqt
-
-pyside6
-
-LabExT-pkg
+git+https://github.com/LabExT/LabExT@movement/relative-absolute#egg=labext-pkg
