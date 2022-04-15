@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from time import sleep
 from typing import Type
+from os import path, listdir
 from LabExT.Movement.MoverNew import MoverNew, Orientation, DevicePort
+from LabExT.Wafer.Chip import Chip
 
 from src.CLI import CLI
 
@@ -12,6 +13,7 @@ class SimulationManager:
         self.cli = CLI(self)
 
         self.mover: Type[MoverNew] = None
+        self.chip: Type[Chip] = None
 
         self.__setup__()
         
@@ -43,6 +45,10 @@ class SimulationManager:
             return
 
         self.cli.out("Successfully configured mover! \n", color=self.cli.SUCCESS_COLOR)
+
+        self.chip = self._import_chip()
+        self.cli.out("Successfully imported chip! \n", color=self.cli.SUCCESS_COLOR)
+
 
 
     def _setup_calibrations(self):
@@ -97,6 +103,31 @@ class SimulationManager:
         except RuntimeError as ex:
             self.cli.out("Setting up mover failed: {}".format(str(ex)), color=self.cli.ERROR_COLOR)
             return False
+
+
+    def _import_chip(self):
+        self.cli.out("3. Import Chip", underline=True)
+        chips_folder = path.join(path.abspath(path.dirname(__file__)), "chips")
+        chip_files = [f for f in listdir(chips_folder) if path.isfile(path.join(chips_folder, f))]
+
+        if len(chip_files) == 0:
+            self.cli.out("No chip files found. Please check the chips folder. Quitting...", color=self.cli.ERROR_COLOR)
+            return 
+
+        self.cli.out("The following chips are available:")
+        for idx, chip_file in enumerate(chip_files):
+            self.cli.out("\t [{}] {}".format(idx, chip_file))
+
+        selected_id = self.cli.ask_for_input(
+            "Select a chip file: {} ".format([i for i in range(0,len(chip_files))]),
+            type=int)
+
+        self.cli.out("Loading Chip file {}...".format(chip_files[selected_id]))
+        try: 
+            return Chip(path=path.join(chips_folder, chip_files[selected_id]))
+        except RuntimeError as ex:
+            self.cli.out("Importing chip failed: {}".format(str(ex)), color=self.cli.ERROR_COLOR)
+            return None
 
     def _select_a_available_stage(self):
         self.cli.out("The following stages are available:")
