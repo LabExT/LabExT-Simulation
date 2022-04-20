@@ -2,6 +2,6 @@ scipy
 numpy
 vedo
 termcolor
-
+inquirer
 
 git+https://github.com/LabExT/LabExT@movement/relative-absolute#egg=labext-pkg

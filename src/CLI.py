@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 from termcolor import cprint
-
+from inquirer import Text, List, Confirm, prompt
+from os import path, listdir
 
 ERROR_COLOR = 'red'
 SUCCESS_COLOR = 'green'
@@ -25,21 +26,6 @@ def out(message: str, color: str = None, highlight: str = None, bold: bool = Fal
         highlight,
         attrs=attrs,
         end="\r" if overwritable else None)
-    
-
-def ask_yes_or_no(message: str = "Do you want to proceed?", default: bool = False) -> bool:
-    answer = str(input("{} ([y]/n) ".format(message)))
-    if answer == '':
-        return default
-
-    if answer in YES_ANSWERS:
-        return True
-    
-    if answer in NO_ANSWERS:
-        return False
-
-    out("Invalid answer {}".format(answer), color=ERROR_COLOR)
-    return ask_yes_or_no(message, default)
 
 def ask_for_input(message: str, type = str, default = None):
     answer_string = input("{} ({}): ".format(message, default) if default is not None else "{}: ".format(message))
@@ -51,3 +37,59 @@ def ask_for_input(message: str, type = str, default = None):
     except Exception:
         out("Invalid type of {}, required type {}".format(answer_string, type), color=ERROR_COLOR)
         return ask_for_input(message, type, default)
+
+
+def success(message: str):
+    out(message, color=SUCCESS_COLOR, bold=True)
+
+def error(message: str):
+    out(message, color=ERROR_COLOR, bold=True)
+
+def confirm(message: str, default: bool = False) -> bool:
+    return prompt([Confirm('x', message=message, default=default)]).get('x', default)
+
+def setup_new_stage(available_stages, orientations, ports):
+    return prompt([
+        List('stage',
+            message="Which stage should be configured?",
+            choices=available_stages
+        ),
+        List('orientation',
+            message="What orientation should the stage have?",
+            choices=orientations
+        ),
+        List('port',
+            message="What port should the stage have?",
+            choices=ports
+        ),
+    ])
+
+def setup_new_chip():
+    chips_folder = path.join(path.abspath(path.dirname(__file__)), "chips")
+    
+    file = prompt([
+        List("path",
+            message="Which chip should be loaded?",
+            choices=[f for f in listdir(chips_folder) if path.isfile(path.join(chips_folder, f))]
+        ),
+    ]).get("path")
+
+    return path.join(chips_folder, file)
+
+
+def setup_mover():
+    return {k: float(v) for k, v in prompt([
+        Text('speed_xy', "Speed XY in um/s", default="200.0"),
+        Text('speed_z', "Speed Z in um/s", default="20.0"),
+        Text('acceleration_xy', "Acceleration XY in um^2/s", default="50.0"),
+        Text('z_lift', "Z channel up-movement in um", default="20.0"),
+    ]).items()}
+
+
+def ask_for_action(message: str, actions: list):
+    return prompt([
+        List('action',
+            message=message,
+            choices=actions
+        )
+    ]).get('action')
