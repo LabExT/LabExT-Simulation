@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import setuptools
 
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -21,7 +24,7 @@ setuptools.setup(
     ],
     entry_points={
         'console_scripts': [
-            'LabExT-Simulation = src.Main:main',
+            'LabExT-Simulation = labext_simulation.__main__:main',
         ],
     },
 )

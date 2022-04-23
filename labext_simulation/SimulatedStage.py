@@ -1,58 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 from time import time, sleep
+from typing import Type
 
-from typing import Type, List
 from LabExT.Movement.Stage import Stage
 from LabExT.Movement.MotorProfiles import trapezoidal_velocity_profile_by_integration
 
-import src.CLI as cli
-from src.Models import StageModel
-from src.Plotter import Plotter
+from labext_simulation.simulation import Simulation
+import labext_simulation.cli as cli
 
 import numpy as np
 from vedo import ProgressBar
 
-class StageSimulator(Stage):
-    driver_loaded = True
+class SimulatedStage:
 
-    # Setup and initialization
-
-    def __init__(self, stage):
+    def __init__(self, stage: Type[Stage]) -> None:
         self.stage: Type[Stage] = stage
 
-        self.plotters: List[Type[Plotter]] = None
-        self.model: Type[StageModel] = None
+        self.simulation: Type[Simulation] = None
+        self.model_identifier = None
 
-        self._position = [0,0,0]
-
-
-    def __register__simulation__(self, plotters, model):
-        self.plotters = plotters
-        self.model = model
-        self._position = self.model.stage_position
-
-    def __position_setter(self, position):
-        self._position = position
-
-    def get_status(self) -> tuple:
-        return ("X status", "Y status", "Z status")
+    def set_simulation(self, simulation: Type[Simulation], model_identifier: int, initial_position: list):
+        self.simulation = simulation
+        self.model_identifier = model_identifier
+        self._position = initial_position
 
     @property
     def position(self) -> list:
         return self._position
 
     def get_current_position(self) -> list:
-        return self.position[:2]
-
+        return self._position[:2]
 
     def move_relative(self, x, y, z=0, wait_for_stopping: bool = True):
         if not wait_for_stopping:
             raise RuntimeError("Wait for stopping must be enabled in simulation")
-
-        if not self.plotters or not self.model:
-            raise RuntimeError("No Simulation defined for this stage.")
 
         self.__peform_simulated_movement([x,y,z], "relative")
 
@@ -61,13 +43,19 @@ class StageSimulator(Stage):
         if not wait_for_stopping:
             raise RuntimeError("Wait for stopping must be enabled in simulation")
 
-        if not self.plotters or not self.model:
-            raise RuntimeError("No Simulation defined for this stage.")
-
         self.__peform_simulated_movement([x,y,z], "absolute")
 
+    #
+    #   Simulate Movement
+    #
+
+    def __position_setter(self, position):
+        self._position = position
 
     def __peform_simulated_movement(self, target, movement_type, sampling_rate=1e4, dt_integration=1e-5):
+        if not self.simulation:
+            raise RuntimeError("No Simulation defined for this stage.")
+
         frames_per_second = 1 / (sampling_rate * dt_integration)
         target = np.array(target)
 
@@ -108,14 +96,12 @@ class StageSimulator(Stage):
         pb = ProgressBar(0, t.size)
         for i in pb.range():
             render_start = time()
-            self.model.pos(x=x[i], y=y[i], z=z[i])
+            self.simulation.render_stage_model(self.model_identifier, [x[i], y[i], z[i]])
             self.__position_setter([x[i], y[i], z[i]])
-            for p in self.plotters:
-                p.render()
-           
             render_time = time() - render_start
 
-            sleep(max(t[i] - current_ts - render_time, 0))
+            if self.simulation.is_realtime:
+                sleep(max(t[i] - current_ts - render_time, 0))
 
             current_ts = t[i]
             total_render_time += render_time
@@ -124,12 +110,11 @@ class StageSimulator(Stage):
 
         cli.success("Stopping simulation...")
         cli.out("Average render time: {}".format(total_render_time / t.size))
-        cli.out("Stage position {}, Mesh position {}, MSE : {}".format(
-            self.position,
-            self.model.stage_position,
-            (np.square(self.position - self.model.stage_position)).mean()))
 
-       
+    #
+    #   Delegate all other methods to stage
+    #
+
     def __str__(self) -> str: return self.stage.__str__()
     @property
     def address_string(self) -> str: return self.stage.address_string
@@ -145,7 +130,7 @@ class StageSimulator(Stage):
     def get_speed_z(self): return self.stage.get_speed_z()
     def set_acceleration_xy(self, umps2): self.stage.set_acceleration_xy(umps2)
     def get_acceleration_xy(self) -> float: return self.stage.get_acceleration_xy()
-
+    def get_status(self) -> tuple: return self.stage.get_status()
     
     def find_reference_mark(self): raise NotImplementedError
     def wiggle_z_axis_positioner(self): raise NotImplementedError
@@ -153,4 +138,3 @@ class StageSimulator(Stage):
     def lower_stage(self, wait_for_stopping: bool = True): raise NotImplementedError
     def get_lift_distance(self): raise  NotImplementedError()
     def set_lift_distance(self, height): raise NotImplementedError
-

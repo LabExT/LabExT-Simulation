@@ -4,4 +4,6 @@ vedo
 termcolor
 inquirer
 
+click
+
 git+https://github.com/LabExT/LabExT@movement/relative-absolute#egg=labext-pkg
