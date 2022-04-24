@@ -6,7 +6,7 @@ from typing import Type
 from LabExT.Movement.Stage import Stage
 from LabExT.Movement.MotorProfiles import trapezoidal_velocity_profile_by_integration
 
-from labext_simulation.simulation import Simulation
+from labext_simulation.simulation import Simulation, SimulationError, StageModel
 import labext_simulation.cli as cli
 
 import numpy as np
@@ -14,59 +14,101 @@ from vedo import ProgressBar
 
 class SimulatedStage:
 
-    def __init__(self, stage: Type[Stage]) -> None:
+    def __init__(self, stage: Type[Stage], simulation: Type[Simulation], model: Type[StageModel]) -> None:
         self.stage: Type[Stage] = stage
+        self.simulation: Type[Simulation] = simulation
+        self.model: Type[StageModel] = model
 
-        self.simulation: Type[Simulation] = None
-        self.model_identifier = None
-
-    def set_simulation(self, simulation: Type[Simulation], model_identifier: int, initial_position: list):
-        self.simulation = simulation
-        self.model_identifier = model_identifier
-        self._position = initial_position
+        self._position: np.ndarray = None
 
     @property
     def position(self) -> list:
-        return self._position
+        return self._position.tolist() if self._position is not None else None
 
     def get_current_position(self) -> list:
-        return self._position[:2]
+        return self.position[:2] if self.position is not None else None
 
     def move_relative(self, x, y, z=0, wait_for_stopping: bool = True):
         if not wait_for_stopping:
             raise RuntimeError("Wait for stopping must be enabled in simulation")
 
-        self.__peform_simulated_movement([x,y,z], "relative")
+        target = self._position + np.array([x,y,z])
+        cli.out("\n\U0001F680 Simulating relative movement of {}".format(self), bold=True)
+        cli.out("- Start Position {}, Target Position {}".format(self._position, target))
+
+        t, p = self.__calculate_waypoints(target)
+        cli.success("Starting simulation...")
+
+        current_ts = 0.0
+        total_render_time = 0.0
+        pb = ProgressBar(0, t.size)
+        for i in pb.range():
+            render_start = time()
+            self.model.addPos(p[i] - self.position)
+            self.simulation.render_simulation_step()
+            self._position = p[i]
+
+            render_time = time() - render_start
+
+            if self.simulation.parameters.realtime:
+                sleep(max(t[i] - current_ts - render_time, 0))
+
+            current_ts = t[i]
+            total_render_time += render_time
+
+            pb.print("[FRAME {} / {}] Move {} to X: {}, Y: {}, Z: {}".format(i, t.size, self, target[0], target[1], target[2]))
+
+        cli.success("Stopping simulation...")
+        cli.out("Average render time: {}".format(total_render_time / t.size))
 
 
     def move_absolute(self, x, y, z, wait_for_stopping: bool = True):
         if not wait_for_stopping:
             raise RuntimeError("Wait for stopping must be enabled in simulation")
 
-        self.__peform_simulated_movement([x,y,z], "absolute")
+        target = np.array([x,y,z])
+        cli.out("\n\U0001F680 Simulating absolute movement of {}".format(self), bold=True)
+        cli.out("- Start Position {}, Target Position {}".format(self._position, target))
+
+        t, p = self.__calculate_waypoints(target)
+        cli.success("Starting simulation...")
+
+        current_ts = 0.0
+        total_render_time = 0.0
+        pb = ProgressBar(0, t.size)
+        for i in pb.range():
+            render_start = time()
+            self.model.pos(p[i])
+            self.simulation.render_simulation_step()
+            self._position = p[i]
+            render_time = time() - render_start
+
+            if self.simulation.parameters.realtime:
+                sleep(max(t[i] - current_ts - render_time, 0))
+
+            current_ts = t[i]
+            total_render_time += render_time
+
+            pb.print("[FRAME {} / {}] Move {} to X: {}, Y: {}, Z: {}".format(i, t.size, self, target[0], target[1], target[2]))
+
+        cli.success("Stopping simulation...")
+        cli.out("Average render time: {}".format(total_render_time / t.size))
 
     #
     #   Simulate Movement
     #
 
-    def __position_setter(self, position):
-        self._position = position
-
-    def __peform_simulated_movement(self, target, movement_type, sampling_rate=1e4, dt_integration=1e-5):
+    def __calculate_waypoints(self, target, dt_integration=1e-5):
+        sampling_rate = self.simulation.parameters.sampling_rate
+        
         if not self.simulation:
             raise RuntimeError("No Simulation defined for this stage.")
 
-        frames_per_second = 1 / (sampling_rate * dt_integration)
-        target = np.array(target)
+        cli.out("- Calculating Waypoints with {} integration and sub sampling rate {}".format(dt_integration, sampling_rate))
 
-        cli.out("\n\U0001F680 Simulating {} movement of {}".format(movement_type, self), bold=True)
-        target = target if movement_type == "absolute" else np.array(self.position) + target
-        cli.out("- Start Position {}, Target Position {}".format(self.position, target))
-        cli.out("- Calculating Waypoints with {} integration and sub sampling rate {} (Frames per second: {})".format(dt_integration, sampling_rate, frames_per_second))
-
-        tx, xs, _, _ = trapezoidal_velocity_profile_by_integration(self.position[0], target[0], self.get_speed_xy(), self.get_acceleration_xy())
-        ty, ys, _, _ = trapezoidal_velocity_profile_by_integration(self.position[1], target[1], self.get_speed_xy(), self.get_acceleration_xy())
-        tz, zs, _, _ = trapezoidal_velocity_profile_by_integration(self.position[2], target[2], self.get_speed_z(), 20.0)
+        tx, xs, _, _ = trapezoidal_velocity_profile_by_integration(self._position[0], target[0], self.get_speed_xy(), self.get_acceleration_xy())
+        ty, ys, _, _ = trapezoidal_velocity_profile_by_integration(self._position[1], target[1], self.get_speed_xy(), self.get_acceleration_xy())
+        tz, zs, _, _ = trapezoidal_velocity_profile_by_integration(self._position[2], target[2], self.get_speed_z(), self.get_acceleration_xy())
 
         if tx.size == 0 and ty.size == 0 and tz.size == 0:
             cli.error("All timepoint vectors are empty! Cannot execute movement!")
@@ -89,27 +131,7 @@ class SimulatedStage:
         y = np.pad(y, (0, t.size - y.size), mode='constant', constant_values=y[-1])
         z = np.pad(z, (0, t.size - z.size), mode='constant', constant_values=z[-1])
 
-        cli.success("Starting simulation...")
-
-        current_ts = 0.0
-        total_render_time = 0.0
-        pb = ProgressBar(0, t.size)
-        for i in pb.range():
-            render_start = time()
-            self.simulation.render_stage_model(self.model_identifier, [x[i], y[i], z[i]])
-            self.__position_setter([x[i], y[i], z[i]])
-            render_time = time() - render_start
-
-            if self.simulation.is_realtime:
-                sleep(max(t[i] - current_ts - render_time, 0))
-
-            current_ts = t[i]
-            total_render_time += render_time
-
-            pb.print("[FRAME {} / {}] Move {} to X: {}, Y: {}, Z: {}".format(i, t.size, self, target[0], target[1], target[2]))
-
-        cli.success("Stopping simulation...")
-        cli.out("Average render time: {}".format(total_render_time / t.size))
+        return t, np.column_stack((x,y,z))
 
     #
     #   Delegate all other methods to stage

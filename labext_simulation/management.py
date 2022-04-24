@@ -3,15 +3,18 @@
 
 from os import path, listdir
 from typing import Type
+from itertools import product
 
 from LabExT.Wafer.Chip import Chip
-from LabExT.Movement.Transformations import CoordinatePairing, StageCoordinate, ChipCoordinate
+from LabExT.Movement.Transformations import CoordinatePairing, StageCoordinate, ChipCoordinate, Axis, Direction
 from LabExT.Movement.MoverNew import MoverNew, Calibration, Orientation, DevicePort
 
 import labext_simulation.cli as cli
 from labext_simulation.SimulatedStage import SimulatedStage
 from labext_simulation.simulation import Simulation
 from labext_simulation.utils import get_all_transformations
+
+
 
 class SimulationManager:
 
@@ -20,7 +23,7 @@ class SimulationManager:
         "Assign a new stage": lambda self: self.assign_stage(),
         "Calibrate stages": lambda self: self.calibrate_stage(),
         "Setup Mover settings": lambda self: self.setup_mover(),
-        "Start new Simulation": lambda self: self.new_simulation(),
+        "Run new Simulation": lambda self: self.run_simulation(),
         "Exit the Simulation": lambda self: self.exit()
     }
 
@@ -35,28 +38,37 @@ class SimulationManager:
 
         self.mover = MoverNew(experiment_manager=None)
         self.chip = None
-        self.simulation = None
 
         self.first_startup = True
 
         cli.success("Initialization completed. \n")
 
     def start(self):
-        if self.first_startup and cli.confirm("Welcome! Want to do a guided setup?", default=True):
-            self.complete_setup()
-
         try:
+            self.simulation = Simulation.build(self.mover)
+
+            if self.first_startup:
+                self.complete_setup()
+                self.first_startup = False
+
             while True:
                 cli.out("Simulation Menu", underline=True, bold=True, color='blue')
                 action_key = cli.choice("What do you want to do?", self.ACTIONS.keys())
                 self.ACTIONS.get(action_key, lambda s: None)(self)
+
         except KeyboardInterrupt:
             cli.out("\nExit LabExT Simulation.")
+            return
 
-
-    def new_simulation(self):
-        simulation = Simulation(self.mover, self.chip)
-        simulation.move_to_all_devices()
+    def run_simulation(self):
+        sim_func = cli.choice("Run Simulation", [
+            ("Show current environment", self.simulation.show_environment),
+            ("Wiggle stage axis", self.simulation.wiggle_axes),
+            ("Move to Device", self.simulation.move_to_device),
+            ("Move to all Devices", self.simulation.move_to_all_devices),
+            ("Back", lambda s: None)
+        ])
+        sim_func()
 
     def import_chip(self):
         """
@@ -66,15 +78,18 @@ class SimulationManager:
             cli.error("No chip files found to import.")
             return
 
+        cli.out(f"{cli.ATOM} Import a Chip:", underline=True, bold=True)
+
         if self.chip and not cli.confirm("You have already loaded a chip. Do you want to replace it?"):
             return
 
         try:
             file = cli.choice("Select a chip file to import", choices=self.chip_files)
             self.chip = Chip(path=file, name=path.basename(file))
-            cli.success("Successfully imported chip!")
+            self.simulation.chip = self.chip
+            cli.success("Successfully imported chip! \n")
         except Exception as error:
-            cli.error("Could not import chip: {}".format(error))
+            cli.error("Could not import chip: {} \n".format(error))
         
 
     def assign_stage(self):
@@ -83,25 +98,28 @@ class SimulationManager:
         """
         if len(self.mover.available_stages) == 0:
             cli.error("No available stages found.")
+            return
 
-        stage = cli.choice(
-            "Which stage should be configured?",
-            self.mover.available_stages)
-        orientation = cli.choice(
-            "What orientation should the stage have?",
-            list(Orientation))
-        port = cli.choice(
-            "What port should the stage have?",
-            list(DevicePort))
+        if not self.simulation.stage_models:
+            cli.error("No simulated stages found. Please create a simulation env first.")
+            return
 
-        c = self.mover.add_stage_calibration(
-            SimulatedStage(stage), 
-            Orientation(orientation),
-            DevicePort(port))
-        c.connect_to_stage()
+        cli.out(f"{cli.ROBOT} Assign a stage to a simulation model:", underline=True, bold=True)
+
+        stage = cli.choice("Select a real stage (connected to the computer):", self.mover.available_stages)
+        model = cli.choice("Choose a Stage Model:", self.simulation.stage_models.values())
+        port = DevicePort(cli.choice("Select a Port", list(DevicePort)))
+        
+        calibration = self.mover.add_stage_calibration(
+            SimulatedStage(stage, self.simulation, model), 
+            orientation=model.orientation,
+            port=port)
+        calibration.connect_to_stage()
+
+        cli.success("Successfully assigned and connected stage! \n")        
 
         if cli.confirm("Do want to calibrate this stage?", default=True):
-            self.calibrate_stage(c)
+            self.calibrate_stage(calibration)
 
 
 
@@ -113,11 +131,16 @@ class SimulationManager:
             cli.error("There are no connected stages to calibrate.")
             return
 
+        cli.out(f"{cli.TOOLS} Calibrate a stage:", underline=True, bold=True)
+
         if calibration is None:
             calibration = cli.choice("Select a stage to calibrate", self.mover.calibrations.values())
 
+        self._calibrate_stage_axes(calibration)
+
         if cli.confirm("Do you want to do a calibration loaded from file?", default=True):
             self._load_calibration_from_file(calibration)
+            cli.success("Successfully calibrated stage! \n")  
             return
 
         while True:
@@ -134,11 +157,14 @@ class SimulationManager:
                 cli.success("New Calibration state: {}".format(calibration.state))
             if not cli.confirm("Do you want to define more pairings?", default=True):
                 break
+        
+        cli.success("Successfully calibrated stage! \n")  
 
     def setup_mover(self):
         """
         Action to setup the mover settings.
         """
+        cli.out(f"{cli.TOOLS} Configure Mover", bold=True, underline=True, color='blue')
         try:
             self.mover.speed_xy = cli.input("Speed XY in um/s", type=float, default=self.mover.DEFAULT_SPEED_XY)
             self.mover.speed_z = cli.input("Speed Z in um/s", type=float, default=self.mover.DEFAULT_SPEED_Z)
@@ -160,23 +186,37 @@ class SimulationManager:
         """
         Action to setup end-to-end.
         """
-        cli.out("1. Import a Chip", underline=True, color="blue")
+        cli.out(f"{cli.HAT} Setup LabExT Mover and Stages", bold=True, underline=True, color='blue')
+        cli.out("The following steps configure the LabExT Mover.\n")
+
         self.import_chip()
         assert self.chip is not None, "No chip imported!"
 
-        cli.out("2. Assign Stages", underline=True, color="blue")
         while True:
             self.assign_stage()
             if not cli.confirm("Do you want to assign another stage?", default=True):
                 break
         assert self.mover.has_connected_stages, "No connected stages!"
 
-        cli.out("3. Setup Mover Settings", underline=True, color="blue")
-        self.setup_mover()
-
         cli.success("\U0001F680 Successfully completed setup! You are ready to go.\n")
         
+    def _calibrate_stage_axes(self, calibration: Type[Calibration]):
+        options = [(" ".join(map(str, o)), o) for o in product(Direction, Axis)]
 
+        for chip_axis in Axis:
+            direction, stage_axis = cli.choice("Positive {}-Chip-axis points to".format(chip_axis), options)
+            calibration.update_axes_rotation(chip_axis, direction, stage_axis)
+        
+        if calibration.axes_rotation.is_valid:
+            cli.success("Successfully updated Axes rotation! Wiggeling axes...")
+            self.simulation.wiggle_all_axes(calibration)
+            if cli.confirm("All good?", default=True):
+                return
+
+            self._calibrate_stage_axes(calibration)
+        else:
+            cli.error("Rotation invalid.")
+            self._calibrate_stage_axes(calibration)
 
     def _create_a_new_pairing(self, calibration) -> Type[CoordinatePairing]:
         """

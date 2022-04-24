@@ -12,6 +12,11 @@ SUCCESS_COLOR = 'green'
 ASK_COLOR = 'yellow'
 
 ARROW_RIGHT = "\U000027A1"
+GLOBE = "\U0001F30D"
+ROBOT = "\U0001F916"
+ATOM = "\U0000269B"
+HAT = "\U0001F3A9"
+TOOLS = "\U0001F6E0"
 
 
 def out(message: str, color: str = None, highlight: str = None, bold: bool = False, underline: bool = False, overwritable: bool=False) -> None:

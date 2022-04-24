@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from scipy.spatial.transform import Rotation
 import numpy as np
 
+import labext_simulation.cli as cli
 
 class View(ABC):
     """
@@ -27,7 +28,38 @@ class View(ABC):
         pass
 
 
-class StageView(View):
+class RelativeView(View):
+    """
+    A Stage view for relative drawings.
+    """
+    @classmethod
+    def build(cls):
+        x_unit = list(map(float, cli.input("X-Axis Unit vector", str, "1,0,0").split(",")))
+        y_unit = list(map(float, cli.input("Y-Axis Unit vector", str, "0,1,0").split(",")))
+        z_unit = list(map(float, cli.input("Z-Axis Unit vector", str, "0,0,1").split(",")))
+
+        return cls(np.array(x_unit), np.array(y_unit), np.array(z_unit))
+
+    
+    def __init__(self, x_unit: np.ndarray, y_unit: np.ndarray, z_unit: np.ndarray) -> None:
+        self.rotation = Rotation.from_matrix(np.column_stack((x_unit, y_unit, z_unit)))
+
+
+    def model_to_world(self, model_coordinates: np.ndarray) -> np.ndarray:
+        """
+        Transforms a model coordinate to a world coordinate.
+        """
+        return self.rotation.apply(model_coordinates)
+
+
+    def world_to_model(self, world_coordinates: np.ndarray) -> np.ndarray:
+        """
+        Transforms a world coordinate to a model coordinate.
+        """
+        return self.rotation.apply(world_coordinates, inverse=True)
+        
+
+class AbsoluteView(View):
     """
     A Stage view for a patricular stage based on a particular chip dimension.
     """
