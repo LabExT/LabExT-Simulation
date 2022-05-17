@@ -194,8 +194,8 @@ class Simulation:
             calibration = self.mover._get_calibration(orientation=orientation)
             if calibration:
                 suggested_position = calibration.stage.position or np.array([0,0,0])
-                if calibration.single_point_transformation.is_valid:
-                    suggested_position = calibration.single_point_transformation._stage_coordinate.to_list()
+                if calibration._single_point_offset.is_valid:
+                    suggested_position = calibration._single_point_offset.pairing.stage_coordinate.to_list()
                 
                 stage_coordinate_str = cli.input("Where is stage {} located (X,Y,Z)?".format(calibration), str, ",".join(map(str, suggested_position)))
                 stage_coordinate = list(map(float, stage_coordinate_str.split(",")))

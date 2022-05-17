@@ -6,8 +6,9 @@ from typing import Type
 from itertools import product
 
 from LabExT.Wafer.Chip import Chip
-from LabExT.Movement.Transformations import CoordinatePairing, StageCoordinate, ChipCoordinate, Axis, Direction
-from LabExT.Movement.MoverNew import MoverNew, Calibration, Orientation, DevicePort
+from LabExT.Movement.config import Axis, Direction, DevicePort
+from LabExT.Movement.Transformations import CoordinatePairing, StageCoordinate, ChipCoordinate
+from LabExT.Movement.MoverNew import MoverNew, Calibration 
 
 import labext_simulation.cli as cli
 from labext_simulation.SimulatedStage import SimulatedStage
@@ -147,9 +148,9 @@ class SimulationManager:
             pairing = self._create_a_new_pairing(calibration)
             if pairing:
                 try:
-                    if not calibration.single_point_transformation.is_valid: 
-                        calibration.update_single_point_transformation(pairing)
-                    calibration.update_full_transformation(pairing)
+                    if not calibration._single_point_offset.is_valid: 
+                        calibration.update_single_point_offset(pairing)
+                    calibration.update_kabsch_rotation(pairing)
                 except Exception as error:
                     cli.error("Could not update transformation: {}".format(error))
                     return
@@ -207,7 +208,7 @@ class SimulationManager:
             direction, stage_axis = cli.choice("Positive {}-Chip-axis points to".format(chip_axis), options)
             calibration.update_axes_rotation(chip_axis, direction, stage_axis)
         
-        if calibration.axes_rotation.is_valid:
+        if calibration._axes_rotation.is_valid:
             cli.success("Successfully updated Axes rotation! Wiggeling axes...")
             self.simulation.wiggle_all_axes(calibration)
             if cli.confirm("All good?", default=True):
@@ -258,14 +259,14 @@ class SimulationManager:
 
         fix_point_id = cli.choice("Select a single point", [(str(c), idx) for idx, c in enumerate(chip_coordinates)])
         
-        calibration.update_single_point_transformation(CoordinatePairing(
+        calibration.update_single_point_offset(CoordinatePairing(
             calibration=calibration,
             stage_coordinate=StageCoordinate.from_list(stage_coordinates[fix_point_id]),
             device=object(),
             chip_coordinate=ChipCoordinate.from_list(chip_coordinates[fix_point_id])))
 
         for idx, chip_coordinate in enumerate(chip_coordinates):
-            calibration.update_full_transformation(CoordinatePairing(
+            calibration.update_kabsch_rotation(CoordinatePairing(
                 calibration=calibration,
                 stage_coordinate=StageCoordinate.from_list(stage_coordinates[idx]),
                 device=object(),
