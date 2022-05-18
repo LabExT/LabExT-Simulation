@@ -5,6 +5,7 @@ import json
 from os import path, listdir
 
 VIEWS_FOLDER = path.join(path.abspath(path.dirname(__file__)), "views")
+CHIPS_FOLDER = path.join(path.abspath(path.dirname(__file__)), "chips")
 
 CALIBRATIONS_FILE = path.join(path.abspath(path.dirname(__file__)), "calibrations.json")
 

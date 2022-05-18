@@ -41,7 +41,12 @@ class RelativeView(View):
         return cls(np.array(x_unit), np.array(y_unit), np.array(z_unit))
 
     
-    def __init__(self, x_unit: np.ndarray, y_unit: np.ndarray, z_unit: np.ndarray) -> None:
+    def __init__(
+        self,
+        x_unit: np.ndarray = np.array([1,0,0]),
+        y_unit: np.ndarray = np.array([0,1,0]),
+        z_unit: np.ndarray = np.array([0,0,1])
+    ) -> None:
         self.rotation = Rotation.from_matrix(np.column_stack((x_unit, y_unit, z_unit)))
 
 

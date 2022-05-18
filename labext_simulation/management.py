@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+from json import load
 from os import path, listdir
 from typing import Type
 from itertools import product
 
+import numpy as np
+
 from LabExT.Wafer.Chip import Chip
-from LabExT.Movement.config import Axis, Direction, DevicePort
+from LabExT.Movement.config import Axis, Direction, DevicePort, Orientation
 from LabExT.Movement.Transformations import CoordinatePairing, StageCoordinate, ChipCoordinate
 from LabExT.Movement.MoverNew import MoverNew, Calibration 
 
 import labext_simulation.cli as cli
 from labext_simulation.SimulatedStage import SimulatedStage
 from labext_simulation.simulation import Simulation
-from labext_simulation.utils import get_all_transformations
-
+from labext_simulation.utils import CHIPS_FOLDER, VIEWS_FOLDER, get_all_transformations
+from labext_simulation.models import ChipModel, StageModel
+from labext_simulation.views import AbsoluteView, RelativeView
 
 
 class SimulationManager:
@@ -39,14 +43,19 @@ class SimulationManager:
 
         self.mover = MoverNew(experiment_manager=None)
         self.chip = None
+        self.simulation = None
 
         self.first_startup = True
 
         cli.success("Initialization completed. \n")
 
+        if cli.confirm("Fast-Setup?", default=True):
+            self._fast_setup()
+
     def start(self):
         try:
-            self.simulation = Simulation.build(self.mover)
+            if self.simulation is None:
+                self.simulation = Simulation.build(self.mover)
 
             if self.first_startup:
                 self.complete_setup()
@@ -271,6 +280,105 @@ class SimulationManager:
                 stage_coordinate=StageCoordinate.from_list(stage_coordinates[idx]),
                 device=object(),
                 chip_coordinate=ChipCoordinate.from_list(chip_coordinate)))
+
+
+    def _fast_setup(self):
+        vacherin_view = path.join(VIEWS_FOLDER, "vacherin.json")
+        chip_file = path.join(CHIPS_FOLDER, "vacherin.csv")
+        with open(vacherin_view, "r") as f:
+            views = load(f)
+
+        # 1. DEFINE STAGE MODELS
+        left_stage_model = StageModel(
+            absolute_view=AbsoluteView(
+                np.array([p.get("stage_coordinate") for p in views.get("left")]),
+                np.array([p.get("chip_coordinate") for p in views.get("left")])),
+            relative_view=RelativeView(),
+            orientation=Orientation.LEFT,
+            fiber_diameter=125,
+            fiber_length=10000,
+            safety_distance=75)
+        right_stage_model = StageModel(
+            absolute_view=AbsoluteView(
+                np.array([p.get("stage_coordinate") for p in views.get("right")]),
+                np.array([p.get("chip_coordinate") for p in views.get("right")])),
+            relative_view=RelativeView(),
+            orientation=Orientation.RIGHT,
+            fiber_diameter=125,
+            fiber_length=10000,
+            safety_distance=75)
+
+        self.simulation = Simulation(self.mover, {
+            Orientation.LEFT: left_stage_model,
+            Orientation.RIGHT: right_stage_model
+        })
+
+        # 2. DEFINE CHIP AND MODEL
+        self.chip = Chip(path=chip_file, name=path.basename(chip_file))
+        self.simulation._chip = self.chip
+        self.simulation.chip_model = ChipModel(
+            inputs=np.array([d.input_coordinate.to_list() for d in self.chip._devices.values()]),
+            outputs=np.array([d.output_coordinate.to_list() for d in self.chip._devices.values()]),
+            coupler_radius=5,
+            chip_width=10000)
+
+        # 3. ADD CALIBRATIONS
+        stage_1 = self.mover.available_stages[0]
+        stage_2 = self.mover.available_stages[1]
+
+        left_calibration = self.mover.add_stage_calibration(
+            SimulatedStage(stage_1, self.simulation, left_stage_model), 
+            orientation=left_stage_model.orientation,
+            port=DevicePort.INPUT)
+        left_calibration.connect_to_stage()
+
+        right_calibration = self.mover.add_stage_calibration(
+            SimulatedStage(stage_2, self.simulation, right_stage_model), 
+            orientation=right_stage_model.orientation,
+            port=DevicePort.OUTPUT)
+        right_calibration.connect_to_stage()
+
+        # 4. CALIBRATION
+        vacherin_trafo = get_all_transformations()[0]
+
+        left_chip_coordinates = vacherin_trafo["left"]["chipCoordinates"]
+        left_stage_coordinates = vacherin_trafo["left"]["stageCoordinates"]
+        right_chip_coordinates = vacherin_trafo["right"]["chipCoordinates"]
+        right_stage_coordinates = vacherin_trafo["right"]["stageCoordinates"]
+
+        left_calibration.update_single_point_offset(CoordinatePairing(
+            calibration=left_calibration,
+            stage_coordinate=StageCoordinate.from_list(left_stage_coordinates[0]),
+            device=object(),
+            chip_coordinate=ChipCoordinate.from_list(left_chip_coordinates[0])))
+
+        right_calibration.update_single_point_offset(CoordinatePairing(
+            calibration=right_calibration,
+            stage_coordinate=StageCoordinate.from_list(right_stage_coordinates[0]),
+            device=object(),
+            chip_coordinate=ChipCoordinate.from_list(right_chip_coordinates[0])))
+
+        for left_chip_coord, left_stage_coord in zip(left_chip_coordinates, left_stage_coordinates):
+            left_calibration.update_kabsch_rotation(CoordinatePairing(
+                calibration=left_calibration,
+                stage_coordinate=StageCoordinate.from_list(left_stage_coord),
+                device=object(),
+                chip_coordinate=ChipCoordinate.from_list(left_chip_coord)))
+
+        for right_chip_coord, right_stage_coord in zip(right_chip_coordinates, right_stage_coordinates):
+            right_calibration.update_kabsch_rotation(CoordinatePairing(
+                calibration=right_calibration,
+                stage_coordinate=StageCoordinate.from_list(right_stage_coord),
+                device=object(),
+                chip_coordinate=ChipCoordinate.from_list(right_chip_coord)))
+
+        self.mover.speed_xy = self.mover.DEFAULT_SPEED_XY
+        self.mover.speed_z = self.mover.DEFAULT_SPEED_Z
+        self.mover.acceleration_xy = 50
+        self.mover.z_lift = self.mover.DEFAULT_Z_LIFT
+
+        self.first_startup = False
+        cli.success("FAST-SETUP COMPLETED!\n")
 
 def start_simulation_manager(chips_folder_path = None, views_folder_path = None):
     manager = SimulationManager(chips_folder_path, views_folder_path)
