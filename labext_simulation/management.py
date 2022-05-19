@@ -76,6 +76,7 @@ class SimulationManager:
             ("Wiggle stage axis", self.simulation.wiggle_axes),
             ("Move to Device", self.simulation.move_to_device),
             ("Move to all Devices", self.simulation.move_to_all_devices),
+            ("Stress Test", self.simulation.stress_test),
             ("Back", lambda s: None)
         ])
         sim_func()
@@ -374,16 +375,16 @@ class SimulationManager:
 
         self.mover.speed_xy = self.mover.DEFAULT_SPEED_XY
         self.mover.speed_z = self.mover.DEFAULT_SPEED_Z
-        self.mover.acceleration_xy = 50
-        self.mover.z_lift = self.mover.DEFAULT_Z_LIFT
+        self.mover.acceleration_xy = 1e7
+        self.mover.z_lift = 100.0
 
         self.first_startup = False
         cli.success("FAST-SETUP COMPLETED!\n")
 
 def start_simulation_manager(chips_folder_path = None, views_folder_path = None):
     manager = SimulationManager(chips_folder_path, views_folder_path)
+    # manager.simulation.move_to_device(100)
     manager.start()
-
 
 def _get_all_file_of_folder(folder):
     if not path.exists(folder):

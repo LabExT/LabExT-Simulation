@@ -3,5 +3,6 @@ numpy
 vedo
 termcolor
 inquirer
+tqdm
 
 click

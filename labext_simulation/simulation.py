@@ -4,7 +4,9 @@
 from collections import namedtuple
 from contextlib import contextmanager
 from itertools import combinations
+from tkinter.tix import Tree
 from typing import Dict, Type
+from tqdm import tqdm
 
 from LabExT.Wafer.Chip import Chip
 from LabExT.Movement.MoverNew import MoverNew
@@ -22,9 +24,10 @@ class SimulationError(RuntimeError):
     pass
 
 class SimulationPlotter(Plotter):
-    def __init__(self):
+    def __init__(self, offscreen=False):
         super().__init__(
             title="LabExT Simulation",
+            offscreen=offscreen,
             axes=dict(
                 xtitle='X [um]',
                 ytitle='Y [um]',
@@ -55,6 +58,8 @@ class Simulation:
 
     @classmethod
     def build(cls, mover):
+
+
         cli.out(f"{cli.GLOBE} Create new Simulation Environment", bold=True, underline=True, color='blue')
         cli.out("The following steps attempt to describe the laboratory environment.\n")
 
@@ -76,6 +81,9 @@ class Simulation:
         self.plotter = None
         self.stage_collision_text = None
         self.chip_collision_text = None
+
+        self.chip_collision = False
+        self.stage_collision = False
 
     @property
     def chip(self):
@@ -148,17 +156,18 @@ class Simulation:
                 calibration.wiggle_axis(axis)
 
 
-    def move_to_device(self):
+    def move_to_device(self, device_id=None):
         cli.out("\n\U0001F680 Simulating moving to device", bold=True)
 
         if not self.chip:
             cli.error("No chip imported!")
             return
 
-        device = self.chip._devices.get(cli.input("Device ID", type=int))
+        device_id = device_id if device_id else cli.input("Device ID", type=int)
+        device = self.chip._devices.get(device_id)
         if device:
             with self.start_simulation():
-                self.mover.move_to_device(device)
+                self.mover.move_to_device(self.chip, device_id)
         else:
             cli.error("Device not found!")
             self.move_to_device()
@@ -173,7 +182,50 @@ class Simulation:
 
         with self.start_simulation():
             for device in self.chip._devices.values():
-                self.mover.move_to_device(device)
+                cli.out(f"Move to device ID: {device._id}", bold=True)
+                self.mover.move_to_device(self.chip, device._id)
+
+    def stress_test(self):
+        cli.out("\n\U0001F680 Simulating all device combinations", bold=True)
+
+        self.plotter = SimulationPlotter(offscreen=False)
+        self.parameters = Simulation.Parameters(
+            realtime=False,
+            fiber_safety_distance=75,
+            chip_safety_distance=10,
+            sampling_rate=int(1e4))
+
+        stage_collisions = 0
+        chip_collisions = 0
+
+        all_devices = list(self.chip._devices.values())
+        for d1, d2 in tqdm(list(combinations(all_devices, 2))):
+            # cli.out(f"From Device {d1._id} to Device {d2._id}")
+            self._set_stage_model_meshes({
+                Orientation.LEFT: d1.input_coordinate.to_numpy(),
+                Orientation.RIGHT: d1.output_coordinate.to_numpy(),
+            })
+            self._set_chip_mesh()
+            self._set_simulation_info()
+            self.plotter.show(interactive=False)
+
+            self.mover.move_to_device(self.chip, d2._id)
+
+            # cli.out(f"Stage Collision: {self.stage_collision}, Chip Collision: {self.chip_collision}", bold=True)
+
+            if self.stage_collision:
+                stage_collisions += 1
+
+            if self.chip_collision:
+                chip_collisions += 1
+
+            self.stage_collision = self.chip_collision = False
+            self.plotter.clear()
+
+        cli.out(f"Stage Collisions: {stage_collisions}, Chip Collisions: {chip_collisions}")
+
+        self.plotter.interactive().close()
+            
 
     #
     #   Helpers
@@ -189,24 +241,23 @@ class Simulation:
             chip_safety_distance=cli.input("Chip safety distance", default=10.0, type=float),
             sampling_rate=cli.input("Sampling Rate (higher is faster)", int, int(1e4)))
 
-    def _set_stage_model_meshes(self):
+    def _set_stage_model_meshes(self, model_positions = {}):
         for orientation, model in self.stage_models.items():
             calibration = self.mover._get_calibration(orientation=orientation)
             if calibration:
-                suggested_position = calibration.stage.position or np.array([0,0,0])
-                if calibration._single_point_offset.is_valid:
-                    suggested_position = calibration._single_point_offset.pairing.stage_coordinate.to_list()
-                
-                stage_coordinate_str = cli.input("Where is stage {} located (X,Y,Z)?".format(calibration), str, ",".join(map(str, suggested_position)))
-                stage_coordinate = list(map(float, stage_coordinate_str.split(",")))
+                model_position = model_positions.get(orientation)
+                if model_position is None:
+                    stage_position = self._find_model_position(calibration)
+                else:
+                    stage_position = model.absolute_view.world_to_model(model_position)
 
-                model.set_simulation_parameters(stage_coordinate, self.parameters.fiber_safety_distance)
-                calibration.stage._position = np.array(stage_coordinate)
+
+                model.set_simulation_parameters(self.parameters.fiber_safety_distance, model_position=stage_position)
+                calibration.stage._position = np.array(stage_position)
                 
                 self.plotter.add(model.mesh())
             else:
                 cli.out("Warning: Created model for {}, but no stage assigned to it.".format(orientation))
-
     def _set_chip_mesh(self):
         if not self.chip_model:
             return
@@ -219,10 +270,21 @@ class Simulation:
         self.chip_collision_text = Text2D(txt="No chip collision detected", pos="top-right", c="green", alpha=1, s=2)
         self.plotter.add(self.stage_collision_text, self.chip_collision_text)
 
+    def _find_model_position(self, calibration: Type[Calibration]) -> np.ndarray:
+        suggested_position = calibration.stage.get_position() or np.array([0,0,0])
+        if calibration._single_point_offset.is_valid:
+            suggested_position = calibration._single_point_offset.pairing.stage_coordinate.to_list()
+        
+        stage_coordinate_str = cli.input("Where is stage {} located (X,Y,Z)?".format(calibration), str, ",".join(map(str, suggested_position)))
+        stage_coordinate = list(map(float, stage_coordinate_str.split(",")))
+
+        return np.array(stage_coordinate)
+
     def _detect_stage_collision(self):
         if any(m1.are_colliding(m2) for m1, m2 in combinations(self.stage_models.values(), 2)):
             self.stage_collision_text.text("STAGE-STAGE COLLISION DETECTED")
             self.stage_collision_text.color("red")
+            self.stage_collision = True
         else:
             self.stage_collision_text.text("No collision detected")
             self.stage_collision_text.color("green")
@@ -236,6 +298,7 @@ class Simulation:
             if self.chip_model.is_stage_colliding(stage_model):
                 self.chip_collision_text.text("CHIP-STAGE COLLISION DETECTED")
                 self.chip_collision_text.color("red")
+                self.chip_collision = True
             else:
                 self.chip_collision_text.text("No collision detected")
                 self.chip_collision_text.color("green")

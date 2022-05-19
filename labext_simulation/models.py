@@ -110,10 +110,10 @@ class StageModel(Model):
     def is_vertically_oriented(self):
         return self.orientation == Orientation.LEFT or self.orientation == Orientation.RIGHT
 
-    def set_simulation_parameters(self, model_position: list, distance: float):
+    def set_simulation_parameters(self, distance: float, model_position: list = None, view_position: list = None):
         self.safety_distance = distance
-        self.model_position = model_position
-        self.view_position = self.absolute_view.model_to_world(np.array(model_position))
+        self.model_position = model_position if model_position is not None else self.absolute_view.world_to_model((np.array(model_position)))
+        self.view_position = view_position if view_position is not None else self.absolute_view.model_to_world(np.array(model_position))
 
     def mesh(self):
         if self.view_position is None:
